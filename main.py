@@ -1,10 +1,12 @@
-import os, sqlite3
-from typing import List
-from praw import Reddit, models
-from discord.ext import commands, tasks
+import os
+import sqlite3
 from threading import Timer
-from py_dotenv import read_dotenv
+
 from colorama import init, Fore, Back, Style
+from discord.ext import commands
+from praw import Reddit, models
+from py_dotenv import read_dotenv
+
 from my_cogs import RedditCog
 
 # global constants

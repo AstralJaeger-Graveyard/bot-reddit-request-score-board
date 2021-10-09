@@ -3,7 +3,6 @@ from enum import Enum
 from typing import List
 from datetime import datetime, timedelta
 
-import discord
 from discord import Embed, Color, Message, TextChannel, Emoji
 from discord.ext import tasks, commands
 from discord.ext.commands import Bot
@@ -114,8 +113,9 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             await message.remove_reaction('🔄', self.bot.user)
 
             cursor = self.database.cursor()
-            update_stmt = "UPDATE messages SET updated_at = datetime('%s', 'now') WHERE message_id == ?"
-            cursor.execute(update_stmt, (message.id, ))
+            update_stmt = "UPDATE messages SET updated_at = ? WHERE message_id == ?"
+            cursor.execute(update_stmt, (int(datetime.now().timestamp()), message.id))
+        self.database.commit()
 
     @checkup_scoreboard.before_loop
     async def before_checkup_scoreboard(self) -> None:
