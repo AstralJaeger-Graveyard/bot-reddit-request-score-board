@@ -3,7 +3,7 @@ from enum import Enum
 from typing import List
 
 import discord
-from discord import Embed, Color, Message, TextChannel, Guild
+from discord import Embed, Color, Message
 from discord.ext import tasks, commands
 from discord.ext.commands import Bot
 from colorama import Fore, Back, Style
@@ -35,7 +35,6 @@ class SubredditState(Enum):
 class RedditCog(commands.Cog, name='ScoreBoardCog'):
     def __init__(self, bot, reddit, subreddit, database):
         self.bot: Bot = bot
-        self.channel: TextChannel = bot.get_channel(896344246330748948)
         self.reddit: Reddit = reddit
         self.subreddit: Subreddit = subreddit
         self.database: sqlite3.Connection = database
@@ -46,6 +45,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
     @tasks.loop(minutes=5)
     async def scrape_scoreboard(self):
+        channel = self.bot.get_channel(896344246330748948)
         i: int
         submission: Submission
         skipped: int = 0
@@ -74,7 +74,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
             # Build embed, send message, store in database
             embed = self.build_embed(submission, author, subreddit, subreddit_name)
-            message = await self.channel.send(embed=embed)
+            message = await channel.send(embed=embed)
             self.put_message_into_database(submission, message)
             self.put_post_into_database(submission, subreddit_name, self.get_submission_state(submission))
 
@@ -238,4 +238,5 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             if author is not None:
                 embed.add_field(name='Account created', value=f'{datetime.utcfromtimestamp(author.created_utc)}',
                                 inline=True)
+        return embed
 
