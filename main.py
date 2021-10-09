@@ -7,26 +7,26 @@ from discord.ext import commands
 from praw import Reddit, models
 from py_dotenv import read_dotenv
 
+from models import Config
 from my_cogs import RedditCog
 
 # global constants
-DB_NAME = "posts.sqlite"
+DB_NAME = "redditrequest.sqlite"
 
 # global variables
+config: Config
 reddit: Reddit
-subreddit: models.Subreddit
 bot: commands.Bot
 database: sqlite3.Connection
-timer: Timer
 
 
 def main():
     startup()
-    global reddit, subreddit, bot, timer
+    global reddit, bot, config
 
     # Create bot instance
     bot = commands.Bot(command_prefix='/')
-    bot.add_cog(RedditCog(bot, reddit, subreddit, database))
+    bot.add_cog(RedditCog(bot, reddit, database, config))
     bot.run(os.getenv('DISCORD_TOKEN'))
 
 
@@ -35,23 +35,16 @@ def startup():
     init()
 
     # Get global's
-    global reddit, subreddit, database, timer
-
-    # Load environment file
-    print(f'{Fore.BLACK}{Back.GREEN}> Reading environment file {Style.RESET_ALL}')
-    dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
-    read_dotenv(dotenv_path)
+    global reddit, database, config
+    config = Config()
 
     # setup reddit
     print(f'{Fore.BLACK}{Back.GREEN}> Initializing Reddit API access {Style.RESET_ALL}')
-    reddit = Reddit(client_id=os.getenv('REDDIT_CLIENT_ID'),
-                    client_secret=os.getenv('REDDIT_SECRET'),
-                    user_agent=os.getenv('REDDIT_USER_AGENT'),
-                    username=os.getenv('REDDIT_USERNAME'),
-                    password=os.getenv('REDDIT_PASSWORD'))
-
-    print(f'{Fore.BLACK}{Back.GREEN}> Fetching target subreddit {Style.RESET_ALL}')
-    subreddit = reddit.subreddit("redditrequest")
+    reddit = Reddit(client_id=config.reddit_client_id,
+                    client_secret=config.reddit_secret,
+                    user_agent=config.reddit_user_agent,
+                    username=config.reddit_username,
+                    password=config.reddit_password)
 
     # setup sqlite3
     print(f'{Fore.BLACK}{Back.GREEN}> Initializing local database {Style.RESET_ALL}')
@@ -62,7 +55,8 @@ def startup():
                          "id INTEGER PRIMARY KEY AUTOINCREMENT," \
                          "post_id TEXT UNIQUE," \
                          "subreddit TEXT," \
-                         "last_checked INTEGER, " \
+                         "created_at INTEGER, " \
+                         "updated_at INTEGER, " \
                          "status INTEGER DEFAULT 0" \
                          ")"
     cursor.execute(create_table_posts)
@@ -82,7 +76,7 @@ def startup():
     cursor.execute(create_table_messages)
     database.commit()
 
-    print(f'{Fore.BLACK}{Back.GREEN}> Setting up scraping timer {Style.RESET_ALL}')
+    print(f'{Fore.BLACK}{Back.GREEN}> Setting up completed - Starting bot {Style.RESET_ALL}')
 
 
 if __name__ == '__main__':

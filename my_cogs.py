@@ -1,7 +1,7 @@
-import sqlite3
-from enum import Enum
 from typing import List
 from datetime import datetime, timedelta
+from sqlite3 import Connection
+from models import Config, SubredditState, SubmissionState
 
 from discord import Embed, Color, Message, TextChannel, Emoji
 from discord.ext import tasks, commands
@@ -15,31 +15,14 @@ from prawcore import Forbidden, NotFound, BadRequest
 from colorama import Fore, Back, Style
 
 
-class SubmissionState(Enum):
-    MANUAL_REVIEW = 0
-    GRANTED = 1
-    DENIED = 2
-    FOLLOWUP = 3
-    NOT_ASSESSED = 4
-
-
-class SubredditState(Enum):
-    PUBLIC = 0
-    RESTRICTED = 1
-    PRIVATE = 2
-    BANNED = 3
-    BAD_URL = 4
-    NOT_REACHABLE = 5
-
-
 class RedditCog(commands.Cog, name='ScoreBoardCog'):
-    def __init__(self, bot, reddit, subreddit, database):
+    def __init__(self, bot: Bot, reddit: Reddit, database: Connection, config: Config):
         self.bot: Bot = bot
         self.reddit: Reddit = reddit
-        self.subreddit: Subreddit = subreddit
-        self.database: sqlite3.Connection = database
+        self.database: Connection = database
+        self.config: Config = config
+        self.subreddit: Subreddit = reddit.subreddit(config.reddit_subreddit)
         self.revisits: List[str] = []
-        self.channel_id:int = 896344246330748948
         self.scrape_scoreboard.start()
         self.checkup_scoreboard.start()
 
@@ -47,14 +30,14 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         self.scrape_scoreboard.cancel()
         self.checkup_scoreboard.cancel()
 
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=10)
     async def scrape_scoreboard(self):
-        channel = self.bot.get_channel(self.channel_id)
+        channel = self.bot.get_channel(self.config.channel_id)
         i: int
         submission: Submission
         skipped: int = 0
 
-        for i, submission in enumerate(self.subreddit.new(limit=50)):
+        for i, submission in enumerate(self.subreddit.new(limit=100)):
 
             # Check if post is already in database
             if self.is_already_posted(submission.id):
@@ -88,16 +71,14 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
     @tasks.loop(hours=8)
     async def checkup_scoreboard(self):
-        channel: TextChannel = self.bot.get_channel(self.channel_id)
+        channel: TextChannel = self.bot.get_channel(self.config.channel_id)
         for post_id in self.revisits:
+
             # Get message id from database
             cursor = self.database.cursor()
-            select_stmt = "SELECT * FROM messages WHERE submission == ?"
+            select_stmt = 'SELECT * FROM messages WHERE submission == ?'
             cursor.execute(select_stmt, (post_id, ))
-
-            message_id = 0
-            for data in cursor:
-                message_id = data[1]
+            message_id = cursor.fetchone()[1]
 
             # get message and submission
             message: Message = await channel.fetch_message(message_id)
@@ -107,15 +88,18 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
             print(f'{Fore.GREEN}{Back.BLACK}  {post_id}: {subreddit_name} {Style.RESET_ALL}')
 
+            # Update embed in Discord message, update timestamps in database
             await message.add_reaction('🔄')
             embed = self.build_embed(submission, submission.author, subreddit, subreddit_name)
             await message.edit(embed=embed)
-            await message.remove_reaction('🔄', self.bot.user)
-
-            cursor = self.database.cursor()
+            update_stmt = 'UPDATE posts SET updated_at = ?, status = ? WHERE post_id == ?'
+            cursor.execute(update_stmt, (int(datetime.now().timestamp()),
+                                         self.get_submission_state(submission),
+                                         post_id))
             update_stmt = "UPDATE messages SET updated_at = ? WHERE message_id == ?"
             cursor.execute(update_stmt, (int(datetime.now().timestamp()), message.id))
-        self.database.commit()
+            self.database.commit()
+            await message.remove_reaction('🔄', self.bot.user)
 
     @checkup_scoreboard.before_loop
     async def before_checkup_scoreboard(self) -> None:
@@ -126,16 +110,22 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
         # Get posts to check
         cursor = self.database.cursor()
-        timestamp: int = int((datetime.now() - timedelta(hours=1)).timestamp())
-        select_stmt = 'SELECT post_id, last_checked FROM posts WHERE status != ? AND last_checked <= ? ORDER BY id'
-        cursor.execute(select_stmt, (SubmissionState.GRANTED.value, timestamp))
+        now = datetime.now()
+        min_age: int = int((now - timedelta(hours=self.config.min_post_age)).timestamp())
+        max_age: int = int((now - timedelta(days=self.config.max_post_age)).timestamp())
+        select_stmt = 'SELECT post_id ' \
+                      'FROM posts ' \
+                      'WHERE status != ? AND created_at <= ? AND created_at >= ? ' \
+                      'ORDER BY id'
+        cursor.execute(select_stmt, (SubmissionState.GRANTED.value, min_age, max_age))
 
         for data in cursor:
             post_id: str = data[0]
-            last_checked: datetime = datetime.utcfromtimestamp(data[1])
             self.revisits.append(post_id)
 
-        print(f'{Fore.GREEN}{Back.BLACK}Revisiting: {Fore.RED}{len(self.revisits)}{Fore.GREEN} posts with this batch {Style.RESET_ALL}')
+        print(f'{Fore.GREEN}{Back.BLACK}'
+              f'Revisiting: {Fore.RED}{len(self.revisits)}{Fore.GREEN} posts with this batch '
+              f'{Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
     def get_subreddit_name_from_url(self, url: str) -> str:
@@ -155,19 +145,21 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         cursor = self.database.cursor()
         select_stmt = "SELECT (post_id) FROM posts WHERE post_id = ?"
         cursor.execute(select_stmt, (submission_id,))
-        already_posted = False
-        for entry in cursor:
-            return True
-        return False
+        data = cursor.fetchall()
+        if len(data) == 0:
+            return False
+        return True
 
     def put_post_into_database(self, submission: Submission, subreddit_name: str, submission_state: SubmissionState) \
             -> None:
         """This method puts a submission (and author) into the database"""
         cursor = self.database.cursor()
-        insert_stmt = 'INSERT INTO posts(post_id, subreddit, last_checked, status) ' \
-                      'VALUES (?, ?, strftime(\'%s\', \'now\'), ?)'
+        insert_stmt = 'INSERT INTO posts(post_id, subreddit, updated_at, created_at, status) ' \
+                      'VALUES (?, ?, ?, ?, ?)'
         cursor.execute(insert_stmt, (submission.id,
                                      subreddit_name,
+                                     int(datetime.now().timestamp()),
+                                     int(datetime.now().timestamp()),
                                      submission_state.value))
 
         author = submission.author
@@ -291,4 +283,3 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
                 embed.add_field(name='Account created', value=f'{datetime.utcfromtimestamp(author.created_utc)}',
                                 inline=True)
         return embed
-
