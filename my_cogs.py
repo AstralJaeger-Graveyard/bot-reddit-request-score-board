@@ -3,7 +3,8 @@ from enum import Enum
 from typing import List
 from datetime import datetime, timedelta
 
-from discord import Embed, Color, Message
+import discord
+from discord import Embed, Color, Message, TextChannel, Emoji
 from discord.ext import tasks, commands
 from discord.ext.commands import Bot
 
@@ -39,6 +40,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         self.subreddit: Subreddit = subreddit
         self.database: sqlite3.Connection = database
         self.revisits: List[str] = []
+        self.channel_id:int = 896344246330748948
         self.scrape_scoreboard.start()
         self.checkup_scoreboard.start()
 
@@ -48,7 +50,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
     @tasks.loop(minutes=5)
     async def scrape_scoreboard(self):
-        channel = self.bot.get_channel(896344246330748948)
+        channel = self.bot.get_channel(self.channel_id)
         i: int
         submission: Submission
         skipped: int = 0
@@ -87,13 +89,37 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
     @tasks.loop(hours=8)
     async def checkup_scoreboard(self):
-        pass
+        channel: TextChannel = self.bot.get_channel(self.channel_id)
+        for post_id in self.revisits:
+            # Get message id from database
+            cursor = self.database.cursor()
+            select_stmt = "SELECT * FROM messages WHERE submission == ?"
+            cursor.execute(select_stmt, (post_id, ))
 
+            message_id = 0
+            for data in cursor:
+                message_id = data[1]
 
+            # get message and submission
+            message: Message = await channel.fetch_message(message_id)
+            submission: Submission = self.reddit.submission(id=post_id)
+            subreddit_name = self.get_subreddit_name_from_url(submission.url)
+            subreddit = self.reddit.subreddit(subreddit_name)
+
+            print(f'{Fore.GREEN}{Back.BLACK}  {post_id}: {subreddit_name} {Style.RESET_ALL}')
+
+            await message.add_reaction('🔄')
+            embed = self.build_embed(submission, submission.author, subreddit, subreddit_name)
+            await message.edit(embed=embed)
+            await message.remove_reaction('🔄', self.bot.user)
+
+            cursor = self.database.cursor()
+            update_stmt = "UPDATE messages SET updated_at = datetime('%s', 'now') WHERE message_id == ?"
+            cursor.execute(update_stmt, (message.id, ))
 
     @checkup_scoreboard.before_loop
     async def before_checkup_scoreboard(self) -> None:
-        print(f'{Fore.GREEN}{Back.BLACK}Getting ready to validate previous posts {Style.RESET_ALL}')
+        print(f'{Fore.GREEN}{Back.BLACK}  Getting ready to validate previous posts {Style.RESET_ALL}')
 
         # Clearing already existing data
         self.revisits = []
@@ -107,9 +133,6 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         for data in cursor:
             post_id: str = data[0]
             last_checked: datetime = datetime.utcfromtimestamp(data[1])
-            print(f'{Fore.GREEN}{Back.BLACK}  '
-                  f'Post: {post_id} - checked: {last_checked} '
-                  f'{Style.RESET_ALL}')
             self.revisits.append(post_id)
 
         print(f'{Fore.GREEN}{Back.BLACK}Revisiting: {Fore.RED}{len(self.revisits)}{Fore.GREEN} posts with this batch {Style.RESET_ALL}')
