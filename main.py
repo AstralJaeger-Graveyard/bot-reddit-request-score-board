@@ -59,12 +59,9 @@ def startup():
     create_table_posts = "CREATE TABLE IF NOT EXISTS posts(" \
                          "id INTEGER PRIMARY KEY AUTOINCREMENT," \
                          "post_id TEXT UNIQUE," \
-                         "url TEXT," \
                          "subreddit TEXT," \
-                         "title TEXT," \
                          "last_checked INTEGER, " \
-                         "status INTEGER DEFAULT 0," \
-                         "message_id INTEGER UNIQUE " \
+                         "status INTEGER DEFAULT 0" \
                          ")"
     cursor.execute(create_table_posts)
     create_table_users = "CREATE TABLE IF NOT EXISTS users(" \
