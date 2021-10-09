@@ -1,18 +1,18 @@
 import sqlite3
 from enum import Enum
 from typing import List
+from datetime import datetime, timedelta
 
-import discord
 from discord import Embed, Color, Message
 from discord.ext import tasks, commands
 from discord.ext.commands import Bot
-from colorama import Fore, Back, Style
-from datetime import datetime
 
 from praw import Reddit
 from praw.models import Subreddit
 from praw.reddit import Submission, Redditor
 from prawcore import Forbidden, NotFound, BadRequest
+
+from colorama import Fore, Back, Style
 
 
 class SubmissionState(Enum):
@@ -38,10 +38,13 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         self.reddit: Reddit = reddit
         self.subreddit: Subreddit = subreddit
         self.database: sqlite3.Connection = database
+        self.revisits: List[str] = []
         self.scrape_scoreboard.start()
+        self.checkup_scoreboard.start()
 
     def cog_unload(self):
         self.scrape_scoreboard.cancel()
+        self.checkup_scoreboard.cancel()
 
     @tasks.loop(minutes=5)
     async def scrape_scoreboard(self):
@@ -56,10 +59,9 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             if self.is_already_posted(submission.id):
                 print(f'Submission already posted, skipping | Skipped: {skipped}')
                 skipped += 1
+                if skipped >= 10:
+                    break
                 continue
-
-            if skipped == 10:
-                break
 
             skipped = 0
 
@@ -80,7 +82,37 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
 
     @scrape_scoreboard.before_loop
     async def before_scrape_scoreboard(self) -> None:
-        print(f'{Fore.BLUE}{Back.BLACK}Waiting...{Style.RESET_ALL}')
+        print(f'{Fore.BLUE}{Back.BLACK}Preparing to scrape new posts {Style.RESET_ALL}')
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=8)
+    async def checkup_scoreboard(self):
+        pass
+
+
+
+    @checkup_scoreboard.before_loop
+    async def before_checkup_scoreboard(self) -> None:
+        print(f'{Fore.GREEN}{Back.BLACK}Getting ready to validate previous posts {Style.RESET_ALL}')
+
+        # Clearing already existing data
+        self.revisits = []
+
+        # Get posts to check
+        cursor = self.database.cursor()
+        timestamp: int = int((datetime.now() - timedelta(hours=1)).timestamp())
+        select_stmt = 'SELECT post_id, last_checked FROM posts WHERE status != ? AND last_checked <= ? ORDER BY id'
+        cursor.execute(select_stmt, (SubmissionState.GRANTED.value, timestamp))
+
+        for data in cursor:
+            post_id: str = data[0]
+            last_checked: datetime = datetime.utcfromtimestamp(data[1])
+            print(f'{Fore.GREEN}{Back.BLACK}  '
+                  f'Post: {post_id} - checked: {last_checked} '
+                  f'{Style.RESET_ALL}')
+            self.revisits.append(post_id)
+
+        print(f'{Fore.GREEN}{Back.BLACK}Revisiting: {Fore.RED}{len(self.revisits)}{Fore.GREEN} posts with this batch {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
     def get_subreddit_name_from_url(self, url: str) -> str:
@@ -109,12 +141,10 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             -> None:
         """This method puts a submission (and author) into the database"""
         cursor = self.database.cursor()
-        insert_stmt = 'INSERT INTO posts(post_id, url, subreddit, title, last_checked, status) ' \
-                      'VALUES (?, ?, ?, ?, strftime(\'%s\', \'now\'), ?)'
+        insert_stmt = 'INSERT INTO posts(post_id, subreddit, last_checked, status) ' \
+                      'VALUES (?, ?, strftime(\'%s\', \'now\'), ?)'
         cursor.execute(insert_stmt, (submission.id,
-                                     submission.url,
                                      subreddit_name,
-                                     submission.title,
                                      submission_state.value))
 
         author = submission.author
@@ -218,7 +248,6 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         embed.url = f'https://www.reddit.com{submission.permalink}'
         embed.timestamp = datetime.utcfromtimestamp(submission.created_utc)
         embed.description = submission.title
-        # embed.add_field(name='Title', value=f'{submission.title}'.center(100, ' '))
         embed.add_field(name='Subreddit state', value=state.name, inline=True)
         embed.add_field(name='Request state', value=submission_state.name, inline=True)
 
