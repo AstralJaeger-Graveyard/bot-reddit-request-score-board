@@ -33,28 +33,22 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
     @tasks.loop(minutes=10)
     async def scrape_scoreboard(self):
         channel = self.bot.get_channel(self.config.channel_id)
-        i: int
         submission: Submission
         skipped: int = 0
 
-        for i, submission in enumerate(self.subreddit.new(limit=100)):
+        for submission in self.subreddit.new(limit=100):
 
             # Check if post is already in database
             if self.is_already_posted(submission.id):
-                print(f'Submission already posted, skipping | Skipped: {skipped}')
-                skipped += 1
-                if skipped >= 10:
-                    break
-                continue
-
-            skipped = 0
+                print(f'Submission already posted, stopping to look further')
+                return
 
             # Parse the subreddit name from url provided in post, get the submission author and the subreddit object
             subreddit_name: str = self.get_subreddit_name_from_url(submission.url)
             author: Redditor = submission.author
             subreddit: Subreddit = self.reddit.subreddit(subreddit_name)
 
-            print(f'{Fore.BLUE}{Back.BLACK}  {i}: r/{subreddit_name} - '
+            print(f'{Fore.BLUE}{Back.BLACK} r/{subreddit_name} - '
                   f'u/{"[deleted]" if author is None else author.name} '
                   f'{Style.RESET_ALL}')
 
@@ -69,7 +63,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         print(f'{Fore.BLUE}{Back.BLACK}Preparing to scrape new posts {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
-    @tasks.loop(hours=8)
+    @tasks.loop(hours=4)
     async def checkup_scoreboard(self):
         channel: TextChannel = self.bot.get_channel(self.config.channel_id)
         for post_id in self.revisits:
