@@ -16,6 +16,12 @@ REDDIT_USER_AGENT=<Reddit user agent>
 REDDIT_SUBREDDIT=redditrequest
 REDDIT_USERNAME=<Reddit username>
 REDDIT_PASSWORD=<Reddit password>
+# How old should a post be before it gets updated [hours]
+MIN_POST_AGE=1
+# How old should a post be before it stops getting updated [days]
+MAX_POST_AGE=21
+# What channel to post in (channelid)
+CHANNEL_ID=<Your channel ID>
 ```
 
 the script can then be run with the command
