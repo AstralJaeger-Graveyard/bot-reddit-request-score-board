@@ -1,6 +1,9 @@
 import os
 from os import path
 from enum import Enum
+
+from asyncpraw.reddit import Subreddit, Submission
+from discord import Message
 from py_dotenv import read_dotenv
 
 
@@ -36,3 +39,11 @@ class SubredditState(Enum):
     BANNED = 3
     BAD_URL = 4
     NOT_REACHABLE = 5
+
+
+class MessageSubredditItem:
+    def __init__(self, submission_id: str, submission: Submission, message_id: int, message: Message):
+        self.submission_id: str = submission_id
+        self.submission: Submission = submission
+        self.message_id: int = message_id
+        self.message: Message = message
