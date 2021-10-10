@@ -1,28 +1,27 @@
 from typing import List
 from datetime import datetime, timedelta
 from sqlite3 import Connection
-from models import Config, SubredditState, SubmissionState
+from models import Config, SubredditState, SubmissionState, MessageSubredditItem
 
 from discord import Embed, Color, Message, TextChannel, Emoji
 from discord.ext import tasks, commands
 from discord.ext.commands import Bot
 
-from praw import Reddit
-from praw.models import Subreddit
-from praw.reddit import Submission, Redditor
-from prawcore import Forbidden, NotFound, BadRequest
+from asyncpraw import Reddit
+from asyncpraw.models import Subreddit
+from asyncpraw.reddit import Submission, Redditor
+from asyncprawcore import Forbidden, NotFound, BadRequest
 
 from colorama import Fore, Back, Style
 
 
-class RedditCog(commands.Cog, name='ScoreBoardCog'):
+class RedditCog(commands.Cog, name='RedditCog'):
     def __init__(self, bot: Bot, reddit: Reddit, database: Connection, config: Config):
         self.bot: Bot = bot
         self.reddit: Reddit = reddit
         self.database: Connection = database
         self.config: Config = config
         self.subreddit: Subreddit = reddit.subreddit(config.reddit_subreddit)
-        self.revisits: List[str] = []
         self.scrape_scoreboard.start()
         self.checkup_scoreboard.start()
         self.first_run = True
@@ -34,97 +33,153 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
     @tasks.loop(minutes=15)
     async def scrape_scoreboard(self):
         channel = self.bot.get_channel(self.config.channel_id)
-        submission: Submission
 
+        # Update first run
         post_limit: int = 250 if self.first_run else 50
         self.first_run = False
 
-        for submission in self.subreddit.new(limit=post_limit):
+        redditrequest: Subreddit = await self.reddit.subreddit('redditrequest')
+        await redditrequest.load()
+
+        submission: Submission
+        async for submission in redditrequest.new(limit=post_limit):
+
+            await submission.load()
+            submission_state = await self.get_submission_state(submission)
 
             # Check if post is already in database
             if self.is_already_posted(submission.id):
-                print(f'{Fore.BLUE}{Back.BLACK}  '
-                      f'Submission already posted, stopping to look further '
+                print(f'{Fore.BLUE}{Back.BLACK}    '
+                      f'Submission already posted  '
                       f'{Style.RESET_ALL}')
-                return
+                continue
 
             # Parse the subreddit name from url provided in post, get the submission author and the subreddit object
             subreddit_name: str = self.get_subreddit_name_from_url(submission.url)
             author: Redditor = submission.author
-            subreddit: Subreddit = self.reddit.subreddit(subreddit_name)
+            await author.load()
+            subreddit: Subreddit = await self.reddit.subreddit(subreddit_name)
+            subreddit_state = await self.get_subreddit_state(subreddit)
 
-            print(f'{Fore.BLUE}{Back.BLACK}  '
-                  f'r/{subreddit_name} - u/{"[deleted]" if author is None else author.name} '
+            print(f'{Fore.BLUE}{Back.BLACK}    '
+                  f'r/{subreddit_name} - u/{"[deleted]" if author is None else author.name}  '
                   f'{Style.RESET_ALL}')
 
             # Build embed, send message, store in database
-            embed = self.build_embed(submission, author, subreddit, subreddit_name)
+            embed = await self.build_embed(submission, author, subreddit, subreddit_name, subreddit_state)
             message = await channel.send(embed=embed)
             self.put_message_into_database(submission, message)
-            self.put_post_into_database(submission, subreddit_name, self.get_submission_state(submission))
+            self.put_post_into_database(submission, subreddit_name, submission_state)
 
     @scrape_scoreboard.before_loop
     async def before_scrape_scoreboard(self) -> None:
-        print(f'{Fore.BLUE}{Back.BLACK}Preparing to scrape new posts {Style.RESET_ALL}')
+        print(f'{Fore.BLUE}{Back.BLACK}> Preparing to scrape new posts {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
     @tasks.loop(hours=2)
     async def checkup_scoreboard(self):
+
+        # Get channel, instantiate the cache list, retrieve the reddit instance
         channel: TextChannel = self.bot.get_channel(self.config.channel_id)
-        for post_id in self.revisits:
+        revisits: List[MessageSubredditItem] = []
+        reddit = self.reddit
 
-            # Get message id from database
-            cursor = self.database.cursor()
-            select_stmt = 'SELECT * FROM messages WHERE submission == ?'
-            cursor.execute(select_stmt, (post_id, ))
-            message_id = cursor.fetchone()[1]
-
-            # get message and submission
-            message: Message = await channel.fetch_message(message_id)
-            submission: Submission = self.reddit.submission(id=post_id)
-            subreddit_name = self.get_subreddit_name_from_url(submission.url)
-            subreddit = self.reddit.subreddit(subreddit_name)
-
-            print(f'{Fore.GREEN}{Back.BLACK}  {post_id}: {subreddit_name} {Style.RESET_ALL}')
-
-            # Update embed in Discord message, update timestamps in database
-            await message.add_reaction('🔄')
-            embed = self.build_embed(submission, submission.author, subreddit, subreddit_name)
-            await message.edit(embed=embed)
-            update_stmt = 'UPDATE posts SET updated_at = ?, status = ? WHERE post_id == ?'
-            cursor.execute(update_stmt, (int(datetime.now().timestamp()),
-                                         self.get_submission_state(submission).value,
-                                         post_id))
-            update_stmt = "UPDATE messages SET updated_at = ? WHERE message_id == ?"
-            cursor.execute(update_stmt, (int(datetime.now().timestamp()), message.id))
-            self.database.commit()
-            await message.remove_reaction('🔄', self.bot.user)
-
-    @checkup_scoreboard.before_loop
-    async def before_checkup_scoreboard(self) -> None:
-        print(f'{Fore.GREEN}{Back.BLACK}  Getting ready to validate previous posts {Style.RESET_ALL}')
-
-        # Clearing already existing data
-        self.revisits = []
-
-        # Get posts to check
+        # Get posts to check (only choose )
         cursor = self.database.cursor()
         now = datetime.now()
         min_age: int = int((now - timedelta(hours=self.config.min_post_age)).timestamp())
         max_age: int = int((now - timedelta(days=self.config.max_post_age)).timestamp())
-        select_stmt = 'SELECT post_id ' \
-                      'FROM posts ' \
+
+        count_stmt = 'SELECT COUNT(*) FROM posts ' \
+                     'WHERE status != ? AND created_at <= ? AND created_at >= ? ' \
+                     'ORDER BY id'
+        cursor.execute(count_stmt, (SubmissionState.GRANTED.value, min_age, max_age))
+        estimated_posts = cursor.fetchone()[0]
+
+        select_stmt = 'SELECT post_id FROM posts ' \
                       'WHERE status != ? AND created_at <= ? AND created_at >= ? ' \
                       'ORDER BY id'
         cursor.execute(select_stmt, (SubmissionState.GRANTED.value, min_age, max_age))
 
         for data in cursor:
-            post_id: str = data[0]
-            self.revisits.append(post_id)
+            # Get submission id from database
+            submission_id: str = data[0]
+            print(f'{Fore.GREEN}{Back.BLACK}    '
+                  f'Pre-fetching {Fore.RED}{len(revisits)}{Fore.GREEN}/'
+                  f'{Fore.RED}{estimated_posts}{Fore.GREEN} - '
+                  f'{Fore.RED}{int((len(revisits)/estimated_posts) * 100)}%  '
+                  f'{Style.RESET_ALL}')
+            # Get submission from reddit by id
+            submission = await reddit.submission(id=submission_id)
+            try:
+                await submission.load()
+            except Forbidden or NotFound:
+                pass
 
-        print(f'{Fore.GREEN}{Back.BLACK}'
-              f'Revisiting: {Fore.RED}{len(self.revisits)}{Fore.GREEN} posts with this batch '
+            # Get message id from database
+            cursor = self.database.cursor()
+            select_stmt = 'SELECT * FROM messages WHERE submission == ?'
+            cursor.execute(select_stmt, (submission_id,))
+            message_id = cursor.fetchone()[1]
+
+            # Get message from discord
+            message: Message = await channel.fetch_message(message_id)
+            await message.add_reaction('🔜')
+
+            # Store in list
+            revisits.append(MessageSubredditItem(submission_id, submission, message_id, message))
+
+        print(f'{Fore.GREEN}{Back.BLACK}> '
+              f'Revisiting: {Fore.RED}{len(revisits)}{Fore.GREEN} posts with this batch  '
               f'{Style.RESET_ALL}')
+
+        for item in revisits:
+            # Add loading reaction-emoji to message
+            await item.message.remove_reaction('🔜', self.bot.user)
+            await item.message.add_reaction('🔄')
+
+            # get message and submission
+            subreddit_name = self.get_subreddit_name_from_url(item.submission.url)
+            subreddit = await reddit.subreddit(subreddit_name)
+            subreddit_state = await self.get_subreddit_state(subreddit)
+
+            submission = item.submission
+            author = submission.author
+            await author.load()
+
+            # Update on CLI
+            print(f'{Fore.GREEN}{Back.BLACK}    '
+                  f'{item.submission_id}: {subreddit_name} '
+                  f'{Style.RESET_ALL}')
+
+            # Update embed in Discord message
+            embed = await self.build_embed(submission,
+                                           submission.author,
+                                           subreddit,
+                                           subreddit_name,
+                                           subreddit_state)
+            await item.message.edit(embed=embed)
+
+            # Prepare database update
+            timestamp: int = int(datetime.now().timestamp())
+            submission_state: SubmissionState = await self.get_submission_state(item.submission)
+            submission_id: str = item.submission_id
+            message_id: int = item.message_id
+
+            posts_update_stmt = 'UPDATE posts SET updated_at = ?, status = ? WHERE post_id == ?'
+            messages_update_stmt = "UPDATE messages SET updated_at = ? WHERE message_id == ?"
+
+            # Update timestamps in database
+            cursor.execute(posts_update_stmt, (timestamp, submission_state.value, submission_id))
+            cursor.execute(messages_update_stmt, (timestamp, message_id))
+            self.database.commit()
+
+            # Remove reaction
+            await item.message.remove_reaction('🔄', self.bot.user)
+
+    @checkup_scoreboard.before_loop
+    async def before_checkup_scoreboard(self) -> None:
+        print(f'{Fore.GREEN}{Back.BLACK}> Getting ready to validate previous posts {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
     def get_subreddit_name_from_url(self, url: str) -> str:
@@ -191,8 +246,9 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         cursor.execute(insert_stmt, (message.id, submission.id))
         pass
 
-    def get_subreddit_state(self, subreddit: Subreddit) -> SubredditState:
+    async def get_subreddit_state(self, subreddit: Subreddit) -> SubredditState:
         try:
+            await subreddit.load()
             if subreddit.subreddit_type == "public":
                 return SubredditState.PUBLIC
             elif subreddit.subreddit_type == "restricted":
@@ -205,8 +261,10 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             return SubredditState.BAD_URL
         return SubredditState.NOT_REACHABLE
 
-    def get_submission_state(self, submission: Submission) -> SubmissionState:
-        for tlc in submission.comments:
+    async def get_submission_state(self, submission: Submission) -> SubmissionState:
+        comments = await submission.comments()
+        async for tlc in comments:
+            await tlc.load()
             author = tlc.author
             if author.name == 'request_bot':
                 tlc_body = tlc.body
@@ -234,15 +292,15 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             return Color.dark_gray()
         return Color.purple()
 
-    def get_subreddit_moderators(self, subreddit: Subreddit) -> List[str]:
+    async def get_subreddit_moderators(self, subreddit: Subreddit) -> List[str]:
         moderators: List[str] = []
-        for mod in subreddit.moderator():
+        async for mod in subreddit.moderator:
             moderators.append(f'u/{mod.name}')
         return moderators
 
-    def build_embed(self, submission: Submission, author: Redditor, subreddit: Subreddit, subreddit_name: str) -> Embed:
-        state = self.get_subreddit_state(subreddit)
-        submission_state = self.get_submission_state(submission)
+    async def build_embed(self, submission: Submission, author: Redditor, subreddit: Subreddit, subreddit_name: str, subreddit_state: SubredditState) -> Embed:
+        state = await self.get_subreddit_state(subreddit)
+        submission_state = await self.get_submission_state(submission)
 
         embed = Embed(title=f'r/{subreddit_name}', color=self.get_embed_color(submission_state))
         if author is None:
@@ -270,7 +328,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             embed.add_field(name='NSFW', value=subreddit.over18, inline=True)
             embed.add_field(name='Members', value=subreddit.subscribers, inline=True)
 
-            moderators = self.get_subreddit_moderators(subreddit)
+            moderators = await self.get_subreddit_moderators(subreddit)
 
             embed.add_field(name='Moderators', value=str(len(moderators)), inline=True)
             if not len(moderators) == 0:
