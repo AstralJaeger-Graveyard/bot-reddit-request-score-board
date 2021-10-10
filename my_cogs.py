@@ -25,22 +25,27 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         self.revisits: List[str] = []
         self.scrape_scoreboard.start()
         self.checkup_scoreboard.start()
+        self.first_run = True
 
     def cog_unload(self):
         self.scrape_scoreboard.cancel()
         self.checkup_scoreboard.cancel()
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=15)
     async def scrape_scoreboard(self):
         channel = self.bot.get_channel(self.config.channel_id)
         submission: Submission
-        skipped: int = 0
 
-        for submission in self.subreddit.new(limit=100):
+        post_limit: int = 250 if self.first_run else 50
+        self.first_run = False
+
+        for submission in self.subreddit.new(limit=post_limit):
 
             # Check if post is already in database
             if self.is_already_posted(submission.id):
-                print(f'Submission already posted, stopping to look further')
+                print(f'{Fore.BLUE}{Back.BLACK}  '
+                      f'Submission already posted, stopping to look further '
+                      f'{Style.RESET_ALL}')
                 return
 
             # Parse the subreddit name from url provided in post, get the submission author and the subreddit object
@@ -48,8 +53,8 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             author: Redditor = submission.author
             subreddit: Subreddit = self.reddit.subreddit(subreddit_name)
 
-            print(f'{Fore.BLUE}{Back.BLACK} r/{subreddit_name} - '
-                  f'u/{"[deleted]" if author is None else author.name} '
+            print(f'{Fore.BLUE}{Back.BLACK}  '
+                  f'r/{subreddit_name} - u/{"[deleted]" if author is None else author.name} '
                   f'{Style.RESET_ALL}')
 
             # Build embed, send message, store in database
@@ -63,7 +68,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
         print(f'{Fore.BLUE}{Back.BLACK}Preparing to scrape new posts {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
-    @tasks.loop(hours=4)
+    @tasks.loop(hours=2)
     async def checkup_scoreboard(self):
         channel: TextChannel = self.bot.get_channel(self.config.channel_id)
         for post_id in self.revisits:
@@ -88,7 +93,7 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             await message.edit(embed=embed)
             update_stmt = 'UPDATE posts SET updated_at = ?, status = ? WHERE post_id == ?'
             cursor.execute(update_stmt, (int(datetime.now().timestamp()),
-                                         self.get_submission_state(submission),
+                                         self.get_submission_state(submission).value,
                                          post_id))
             update_stmt = "UPDATE messages SET updated_at = ? WHERE message_id == ?"
             cursor.execute(update_stmt, (int(datetime.now().timestamp()), message.id))
@@ -270,10 +275,12 @@ class RedditCog(commands.Cog, name='ScoreBoardCog'):
             embed.add_field(name='Moderators', value=str(len(moderators)), inline=True)
             if not len(moderators) == 0:
                 embed.add_field(name='Moderators', value=str(', '.join(moderators)), inline=False)
-            embed.add_field(name='Subreddit created', value=str(datetime.utcfromtimestamp(subreddit.created_utc)),
+            embed.add_field(name='Subreddit created',
+                            value=datetime.utcfromtimestamp(subreddit.created_utc).strftime('%Y-%m-%d'),
                             inline=True)
 
-            if author is not None:
-                embed.add_field(name='Account created', value=f'{datetime.utcfromtimestamp(author.created_utc)}',
-                                inline=True)
+        if author is not None and not hasattr(author, 'is_suspended'):
+            embed.add_field(name='Account created',
+                            value=datetime.utcfromtimestamp(author.created_utc).strftime('%Y-%m-%d'),
+                            inline=True)
         return embed
