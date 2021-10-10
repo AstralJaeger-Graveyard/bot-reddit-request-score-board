@@ -44,7 +44,8 @@ def startup():
                     client_secret=config.reddit_secret,
                     user_agent=config.reddit_user_agent,
                     username=config.reddit_username,
-                    password=config.reddit_password)
+                    password=config.reddit_password,
+                    check_for_async=False)
 
     # setup sqlite3
     print(f'{Fore.BLACK}{Back.GREEN}> Initializing local database {Style.RESET_ALL}')
