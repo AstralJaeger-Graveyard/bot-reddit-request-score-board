@@ -16,9 +16,8 @@ class Config:
         self.reddit_subreddit = os.getenv("REDDIT_SUBREDDIT")
         self.reddit_username = os.getenv("REDDIT_USERNAME")
         self.reddit_password = os.getenv("REDDIT_PASSWORD")
-        self.update_rate = os.getenv("UPDATE_RATE")
-        self.min_post_age = os.getenv("MIN_POST_AGE")
-        self.max_post_age = os.getenv("MAX_POST_AGE")
+        self.min_post_age = int(os.getenv("MIN_POST_AGE"))
+        self.max_post_age = int(os.getenv("MAX_POST_AGE"))
         self.channel_id = int(os.getenv("CHANNEL_ID"))
 
 
