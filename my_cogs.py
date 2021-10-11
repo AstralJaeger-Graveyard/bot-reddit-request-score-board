@@ -49,15 +49,15 @@ class RedditCog(commands.Cog, name='RedditCog'):
         submission: Submission
         for submission in reversed(new_submissions):
 
-            await submission.load()
-            submission_state = await self.get_submission_state(submission)
-
             # Check if post is already in database
             if self.is_already_posted(submission.id):
                 print(f'{Fore.BLUE}    '
                       f'Submission already posted  '
                       f'{Style.RESET_ALL}')
                 continue
+
+            await submission.load()
+            submission_state = await self.get_submission_state(submission)
 
             # Parse the subreddit name from url provided in post, get the submission author and the subreddit object
             subreddit_name: str = self.get_subreddit_name_from_url(submission.url)
