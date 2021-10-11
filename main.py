@@ -1,6 +1,7 @@
 import os
 import sqlite3
 
+import discord
 from colorama import init, Fore, Back, Style
 from discord.ext import commands
 from asyncpraw import Reddit
@@ -26,6 +27,8 @@ def main():
     bot = commands.Bot(command_prefix='/')
     bot.add_cog(RedditCog(bot, reddit, database, config))
     bot.run(os.getenv('DISCORD_TOKEN'))
+
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="for new posts"))
 
 
 def startup():
