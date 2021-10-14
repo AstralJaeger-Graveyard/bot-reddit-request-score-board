@@ -184,8 +184,39 @@ class RedditCog(commands.Cog, name='RedditCog'):
     async def request_details(self, ctx, arg):
         await ctx.send(f'Argument: {arg}')
 
-    async def request_statistics(self, ctx):
-        await ctx.send(f'Statistics')
+    @commands.cooldown(1, 30, commands.BucketType.guild)
+    @commands.command(name="statistics")
+    async def request_statistics(self, ctx, timeframe: int = 24):
+        embed: Embed = Embed(color=Color.from_rgb(0, 187, 255))
+        embed.title = "Statistics"
+
+        now = datetime.now()
+        max_age: int = int((now - timedelta(days=timeframe)).timestamp())
+        post_count = self.database.get_post_count(max_age)
+        granted_count = self.database.get_post_count_with_status(max_age, SubmissionState.GRANTED)
+        denied_count = self.database.get_post_count_with_status(max_age, SubmissionState.DENIED)
+        followup_count = self.database.get_post_count_with_status(max_age, SubmissionState.FOLLOWUP)
+        manualreview_count = self.database.get_post_count_with_status(max_age, SubmissionState.MANUAL_REVIEW)
+        notassessed_count = self.database.get_post_count_with_status(max_age, SubmissionState.NOT_ASSESSED)
+
+        embed.add_field(name='Timeframe', value=f'{timeframe}h', inline=False)
+        embed.add_field(name='Posts', value=f'{post_count}', inline=True)
+        embed.add_field(name='Granted', value=f'{granted_count}', inline=True)
+        embed.add_field(name='Denied', value=f'{denied_count}', inline=True)
+        embed.add_field(name='Followup', value=f'{followup_count}', inline=True)
+        embed.add_field(name='Manual review', value=f'{manualreview_count}', inline=True)
+        embed.add_field(name='Not assessed', value=f'{notassessed_count}', inline=True)
+
+        embed.add_field(name='Success-rate', value=f'{round(granted_count/post_count*100, 2)}%', inline=False)
+        embed.add_field(name='Denial-rate', value=f'{round(denied_count/post_count*100, 2)}%', inline=True)
+        embed.add_field(name='Manual-review-rate', value=f'{round(manualreview_count/post_count*100, 2)}%', inline=True)
+
+        embed.timestamp = now
+        embed.set_author(name='r/RedditRequest',
+                         icon_url='https://styles.redditmedia.com/t5_2rlnw/styles/communityIcon_s4c3lvscu5x11.png?width=256&s=27a7e5edddf7d81f2591f5c0deb78e74cacfadf6')
+        embed.set_image(url='https://styles.redditmedia.com/t5_2rlnw/styles/bannerBackgroundImage_m1rtyjm9u5x11.jpg?width=4000&format=pjpg&s=aaa5357108238dd8264de87af6e1ab54914dabaf')
+
+        await ctx.send(embed=embed)
 
     def get_all_channels(self) -> List[TextChannel]:
         channels: List[TextChannel] = []

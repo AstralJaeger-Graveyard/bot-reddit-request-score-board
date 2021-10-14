@@ -184,3 +184,17 @@ class Database:
         posts_update_stmt = 'UPDATE submissions SET updated_at = ?, status = ? WHERE submission_id == ?'
         cursor.execute(posts_update_stmt, (submission_id, timestamp, status.value))
         self.connection.commit()
+
+    def get_post_count(self, max_age: int) -> int:
+        cursor = self.connection.cursor()
+        count_stmt = 'SELECT COUNT(*) FROM submissions ' \
+                     'WHERE created_at >= ? '
+        cursor.execute(count_stmt, (max_age, ))
+        return cursor.fetchone()[0]
+
+    def get_post_count_with_status(self, max_age: int, status: SubmissionState) -> int:
+        cursor = self.connection.cursor()
+        count_stmt = 'SELECT COUNT(*) FROM submissions ' \
+                     'WHERE status == ? and created_at >= ? '
+        cursor.execute(count_stmt, (status.value, max_age))
+        return cursor.fetchone()[0]
