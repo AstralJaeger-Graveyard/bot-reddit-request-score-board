@@ -14,7 +14,9 @@ from models import SubmissionState
 class Database:
     def __init__(self, database_name: str):
         self.database_name: str = database_name
+        self.__check_database_name()
         db_path = path.join(path.dirname(__file__), self.database_name)
+
         self.connection: Connection = sqlite3.connect(db_path)
 
         self.__setup_database()
@@ -56,7 +58,8 @@ class Database:
         cursor.execute(create_table_messages)
         self.connection.commit()
 
-    async def put_submission(self, submission: Submission, subreddit_name: str, submission_state: SubmissionState) -> None:
+    async def put_submission(self, submission: Submission, subreddit_name: str, submission_state: SubmissionState)\
+            -> None:
         """This method inserts a submission into the database"""
         cursor = self.connection.cursor()
         insert_stmt: str = 'INSERT INTO submissions(submission_id, subreddit, updated_at, created_at, status) ' \
