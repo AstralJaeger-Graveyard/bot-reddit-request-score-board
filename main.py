@@ -1,11 +1,10 @@
 import os
-import sqlite3
 
-import discord
 from colorama import init, Fore, Back, Style
 from discord.ext import commands
 from asyncpraw import Reddit
 
+from database import Database
 from models import Config
 from my_cogs import RedditCog
 
@@ -16,7 +15,7 @@ DB_NAME = "redditrequest.sqlite"
 config: Config
 reddit: Reddit
 bot: commands.Bot
-database: sqlite3.Connection
+database: Database
 
 
 def main():
@@ -27,8 +26,6 @@ def main():
     bot = commands.Bot(command_prefix='/')
     bot.add_cog(RedditCog(bot, reddit, database, config))
     bot.run(os.getenv('DISCORD_TOKEN'))
-
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="for new posts"))
 
 
 def startup():
@@ -51,32 +48,7 @@ def startup():
 
     # setup sqlite3
     print(f'{Fore.WHITE}{Back.BLACK}> Initializing local database  {Style.RESET_ALL}')
-    database = sqlite3.connect(DB_NAME)
-    cursor = database.cursor()
-    create_table_posts = "CREATE TABLE IF NOT EXISTS posts(" \
-                         "id INTEGER PRIMARY KEY AUTOINCREMENT," \
-                         "post_id TEXT UNIQUE," \
-                         "subreddit TEXT," \
-                         "created_at INTEGER, " \
-                         "updated_at INTEGER, " \
-                         "status INTEGER DEFAULT 0" \
-                         ")"
-    cursor.execute(create_table_posts)
-    create_table_users = "CREATE TABLE IF NOT EXISTS users(" \
-                         "id INTEGER PRIMARY KEY AUTOINCREMENT," \
-                         "user_name TEXT UNIQUE," \
-                         "request_count INTEGER DEFAULT  1" \
-                         ")"
-    cursor.execute(create_table_users)
-    create_table_messages = "CREATE TABLE IF NOT EXISTS messages(" \
-                            "id INTEGER PRIMARY KEY AUTOINCREMENT," \
-                            "message_id INTEGER UNIQUE," \
-                            "submission TEXT UNIQUE, " \
-                            "created_at INTEGER, " \
-                            "updated_at INTEGER" \
-                            ")"
-    cursor.execute(create_table_messages)
-    database.commit()
+    database = Database(config.sqlite_path)
     print(f'{Fore.WHITE}{Back.BLACK}> Setting up completed - Starting bot  {Style.RESET_ALL}')
 
 

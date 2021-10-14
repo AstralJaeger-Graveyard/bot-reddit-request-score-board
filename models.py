@@ -19,9 +19,10 @@ class Config:
         self.reddit_subreddit = os.getenv("REDDIT_SUBREDDIT")
         self.reddit_username = os.getenv("REDDIT_USERNAME")
         self.reddit_password = os.getenv("REDDIT_PASSWORD")
+        self.sqlite_path = os.getenv("SQLITE_PATH")
         self.min_post_age = int(os.getenv("MIN_POST_AGE"))
         self.max_post_age = int(os.getenv("MAX_POST_AGE"))
-        self.channel_id = int(os.getenv("CHANNEL_ID"))
+        self.channel_name = os.getenv("CHANNEL_NAME")
 
 
 class SubmissionState(Enum):
@@ -30,6 +31,7 @@ class SubmissionState(Enum):
     DENIED = 2
     FOLLOWUP = 3
     NOT_ASSESSED = 4
+    NOT_CATEGORIZABLE = 5
 
 
 class SubredditState(Enum):
