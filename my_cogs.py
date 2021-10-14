@@ -180,6 +180,7 @@ class RedditCog(commands.Cog, name='RedditCog'):
         print(f'{Fore.GREEN}> Getting ready to validate previous posts {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
 
+    @commands.cooldown(1, 60, commands.BucketType.guild)
     @commands.command(name="details")
     async def request_details(self, ctx, arg):
         await ctx.send(f'Argument: {arg}')
@@ -199,15 +200,17 @@ class RedditCog(commands.Cog, name='RedditCog'):
         manualreview_count = self.database.get_post_count_with_status(max_age, SubmissionState.MANUAL_REVIEW)
         notassessed_count = self.database.get_post_count_with_status(max_age, SubmissionState.NOT_ASSESSED)
 
-        embed.add_field(name='Timeframe', value=f'{timeframe}h', inline=False)
+        embed.add_field(name='Timeframe', value=f'{timeframe}h', inline=True)
         embed.add_field(name='Posts', value=f'{post_count}', inline=True)
+        embed.add_field(name='\u200b', value='\u200b', inline=False)
         embed.add_field(name='Granted', value=f'{granted_count}', inline=True)
         embed.add_field(name='Denied', value=f'{denied_count}', inline=True)
+        embed.add_field(name='\u200b', value='\u200b', inline=False)
         embed.add_field(name='Followup', value=f'{followup_count}', inline=True)
         embed.add_field(name='Manual review', value=f'{manualreview_count}', inline=True)
         embed.add_field(name='Not assessed', value=f'{notassessed_count}', inline=True)
-
-        embed.add_field(name='Success-rate', value=f'{round(granted_count/post_count*100, 2)}%', inline=False)
+        embed.add_field(name='\u200b', value='\u200b', inline=False)
+        embed.add_field(name='Success-rate', value=f'{round(granted_count/post_count*100, 2)}%', inline=True)
         embed.add_field(name='Denial-rate', value=f'{round(denied_count/post_count*100, 2)}%', inline=True)
         embed.add_field(name='Manual-review-rate', value=f'{round(manualreview_count/post_count*100, 2)}%', inline=True)
 
