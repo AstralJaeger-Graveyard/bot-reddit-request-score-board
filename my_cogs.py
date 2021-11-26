@@ -1,8 +1,9 @@
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timedelta
-from sqlite3 import Connection
 
 import aiostream.stream
+import discord.ext.commands
+from discord_components import Button, ButtonStyle, ComponentsBot, Interaction
 
 from database import Database
 from models import Config, SubredditState, SubmissionState
@@ -10,9 +11,10 @@ from utilities import get_subreddit_state, get_submission_state, get_subreddit_m
     get_subreddit_name, get_embed_color
 from time import time, gmtime, strftime
 
-from discord import Embed, Color, Message, TextChannel, Guild, Member
+from discord import Embed, Color, Message, TextChannel, Guild
 from discord.ext import tasks, commands
 from discord.ext.commands import Bot
+from discord.abc import Messageable
 
 from asyncpraw import Reddit
 from asyncpraw.models import Subreddit
@@ -20,9 +22,17 @@ from asyncpraw.reddit import Submission, Redditor
 
 from colorama import Fore, Style
 
+glob_reddit: Reddit
+glob_bot: ComponentsBot
+
 
 class RedditCog(commands.Cog, name='RedditCog'):
-    def __init__(self, bot: Bot, reddit: Reddit, database: Database, config: Config):
+    def __init__(self, bot: ComponentsBot, reddit: Reddit, database: Database, config: Config):
+
+        global glob_bot, glob_reddit
+        glob_bot = bot
+        glob_reddit = reddit
+
         self.bot: Bot = bot
         self.reddit: Reddit = reddit
         self.database: Database = database
@@ -46,9 +56,11 @@ class RedditCog(commands.Cog, name='RedditCog'):
         post_limit: int = 250 if self.first_run else 50
         self.first_run = False
 
+        # Get supreddit and load in
         redditrequest: Subreddit = await self.reddit.subreddit('redditrequest')
         await redditrequest.load()
 
+        # Get new submissions, reverse order and iterate through them
         new_submissions: List[Submission] = await aiostream.stream.list(redditrequest.new(limit=post_limit))
         submission: Submission
         for submission in reversed(new_submissions):
@@ -57,6 +69,7 @@ class RedditCog(commands.Cog, name='RedditCog'):
             if self.database.is_already_submitted(submission.id):
                 continue
 
+            # Load in submission
             await submission.load()
             submission_state = await get_submission_state(submission)
 
@@ -68,6 +81,7 @@ class RedditCog(commands.Cog, name='RedditCog'):
             subreddit: Subreddit = await self.reddit.subreddit(subreddit_name)
             subreddit_state = await get_subreddit_state(subreddit)
 
+            # Update CLI
             print(f'{Fore.BLUE}    '
                   f'r/{subreddit_name} - u/{"[deleted]" if author is None else author.name} - '
                   f'State: {subreddit_state.name}  '
@@ -76,8 +90,15 @@ class RedditCog(commands.Cog, name='RedditCog'):
             # Build embed, send message, store in database
             embed = await self.build_embed(submission, author, subreddit, subreddit_name, subreddit_state)
 
+            # Announce new post in all channels
             for channel in channels:
-                message = await channel.send(embed=embed)
+                # Send message with embeds and add components to it
+                message = await channel.send(embed=embed, components=[
+                    self.bot.components_manager.add_callback(
+                        Button(style=ButtonStyle.blue, label='Detailed Report', custom_id='detailed_report'),
+                        callback=send_detailed_report
+                    )
+                ])
                 self.database.put_message(message, submission)
 
                 # Remove reaction and add reaction if already granted or denied
@@ -172,18 +193,13 @@ class RedditCog(commands.Cog, name='RedditCog'):
         print(f'{Fore.GREEN}> '
               f'Finished: Revisited {Fore.RED}{updated_posts}{Fore.GREEN} posts with this batch. Took: '
               f'{strftime("%H:%M:%S", gmtime(stop_time - start_time))} '
-              f'Average: {strftime("%M:%S", gmtime(int((stop_time - start_time)/max(updated_posts, 1))))}   '
+              f'Average: {strftime("%M:%S", gmtime(int((stop_time - start_time) / max(updated_posts, 1))))}   '
               f'{Style.RESET_ALL}')
 
     @update_posts.before_loop
     async def before_checkup_scoreboard(self) -> None:
         print(f'{Fore.GREEN}> Getting ready to validate previous posts {Style.RESET_ALL}')
         await self.bot.wait_until_ready()
-
-    @commands.cooldown(1, 60, commands.BucketType.guild)
-    @commands.command(name="details")
-    async def request_details(self, ctx, arg):
-        await ctx.send(f'Argument: {arg}')
 
     @commands.cooldown(1, 30, commands.BucketType.guild)
     @commands.command(name="statistics")
@@ -210,14 +226,16 @@ class RedditCog(commands.Cog, name='RedditCog'):
         embed.add_field(name='Manual review', value=f'{manualreview_count}', inline=True)
         embed.add_field(name='Not assessed', value=f'{notassessed_count}', inline=True)
         embed.add_field(name='\u200b', value='\u200b', inline=False)
-        embed.add_field(name='Success-rate', value=f'{round(granted_count/post_count*100, 2)}%', inline=True)
-        embed.add_field(name='Denial-rate', value=f'{round(denied_count/post_count*100, 2)}%', inline=True)
-        embed.add_field(name='Manual-review-rate', value=f'{round(manualreview_count/post_count*100, 2)}%', inline=True)
+        embed.add_field(name='Success-rate', value=f'{round(granted_count / post_count * 100, 2)}%', inline=True)
+        embed.add_field(name='Denial-rate', value=f'{round(denied_count / post_count * 100, 2)}%', inline=True)
+        embed.add_field(name='Manual-review-rate', value=f'{round(manualreview_count / post_count * 100, 2)}%',
+                        inline=True)
 
         embed.timestamp = now
         embed.set_author(name='r/RedditRequest',
                          icon_url='https://styles.redditmedia.com/t5_2rlnw/styles/communityIcon_s4c3lvscu5x11.png?width=256&s=27a7e5edddf7d81f2591f5c0deb78e74cacfadf6')
-        embed.set_image(url='https://styles.redditmedia.com/t5_2rlnw/styles/bannerBackgroundImage_m1rtyjm9u5x11.jpg?width=4000&format=pjpg&s=aaa5357108238dd8264de87af6e1ab54914dabaf')
+        embed.set_image(
+            url='https://styles.redditmedia.com/t5_2rlnw/styles/bannerBackgroundImage_m1rtyjm9u5x11.jpg?width=4000&format=pjpg&s=aaa5357108238dd8264de87af6e1ab54914dabaf')
 
         await ctx.send(embed=embed)
 
@@ -260,8 +278,10 @@ class RedditCog(commands.Cog, name='RedditCog'):
         embed.add_field(name='Subreddit state', value=state.name, inline=True)
         embed.add_field(name='Request state', value=submission_state.name, inline=True)
 
-        if state == SubredditState.PUBLIC:
-            embed.set_thumbnail(url=subreddit.community_icon)
+        if state == SubredditState.PUBLIC or state == SubredditState.RESTRICTED:
+            await subreddit.load()
+            if subreddit.community_icon is not None:
+                embed.set_thumbnail(url=subreddit.community_icon)
             embed.add_field(name='NSFW', value=subreddit.over18, inline=True)
             embed.add_field(name='Members', value=subreddit.subscribers, inline=True)
 
@@ -279,3 +299,80 @@ class RedditCog(commands.Cog, name='RedditCog'):
                             value=datetime.utcfromtimestamp(author.created_utc).strftime('%Y-%m-%d'),
                             inline=True)
         return embed
+
+    @commands.bot.event
+    async def on_interaction(self, interaction):
+        await interaction.respond(content=f'')
+
+async def send_detailed_report(interaction: Interaction):
+    global glob_bot, glob_reddit
+    await glob_bot.wait_until_ready()
+
+    await interaction.respond(content=f'Generating detailed report, this may take some time')
+    channel: Optional[Messageable] = interaction.channel
+    if channel is None:
+        return
+
+    message: Message = interaction.message
+    if message.embeds is None or len(message.embeds) != 1:
+        return
+
+    title_embed: Embed = message.embeds[0]
+    embeds: List[Embed] = [title_embed]
+    embeds += await build_detailed_report_embeds(glob_bot, glob_reddit, title_embed)
+    await message.edit(embeds=embeds)
+
+
+async def build_detailed_report_embeds(bot: ComponentsBot, reddit: Reddit, title_embed: Embed) -> List[Embed]:
+    embeds: List[Embed] = list()
+    submission: Submission = await reddit.submission(url=title_embed.url)
+    await submission.load()
+
+    embed: Embed = Embed(title="Report for requester", color=title_embed.color)
+    author = submission.author
+    await author.load()
+    embed.url = f'https://www.reddit.com/user/{author.name}'
+    if author is None or hasattr(author, 'is_suspended'):
+        embed.description = "Account was deleted or suspended"
+    else:
+        now: datetime = datetime.now()
+        created: datetime = datetime.fromtimestamp(author.created_utc)
+        difference = now - created
+        embed.add_field(name='Account created',
+                        value=datetime.utcfromtimestamp(author.created_utc).strftime('%Y-%m-%d'),
+                        inline=True)
+        embed.add_field(name='Account age',
+                        value=str(difference),
+                        inline=True)
+        embed.add_field(name='\u200b', value='\u200b', inline=False)
+        embed.add_field(name='Verified account',
+                        value='✅' if author.verified else '❌',
+                        inline=True)
+        embed.add_field(name='Reddit Gold™',
+                        value='✅' if author.is_gold else '❌',
+                        inline=True)
+        embed.add_field(name='\u200b', value='\u200b', inline=False)
+        embed.add_field(name='Total Comment Karma',
+                        value=str(author.comment_karma),
+                        inline=True)
+        embed.add_field(name='Total Submission Karma',
+                        value=str(author.total_karma),
+                        inline=True)
+    embeds.append(embed)
+
+    embed: Embed = Embed(title="Report for requested subreddit", color=title_embed.color)
+    subreddit_name = get_subreddit_name(submission.url)
+    subreddit = await reddit.subreddit(subreddit_name)
+    subreddit_state: SubredditState = await get_subreddit_state(subreddit)
+    if subreddit_state not in [SubredditState.PUBLIC, SubredditState.RESTRICTED]:
+        embed.description = f'Subreddit is *{subreddit_state.name}*, can\'t load further data'
+    else:
+        embed.description = f'Subreddit {subreddit.display_name_prefixed} currently has {len(subreddit.moderator)} moderators'
+
+    embeds.append(embed)
+
+    if subreddit_state is SubredditState.PUBLIC or subreddit_state is SubredditState.RESTRICTED:
+        embed: Embed = Embed(title="Report for subreddit moderators", color=title_embed.color)
+
+        embeds.append(embed)
+    return embeds

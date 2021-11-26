@@ -1,7 +1,7 @@
 import os
 
 from colorama import init, Fore, Back, Style
-from discord.ext import commands
+from discord_components import DiscordComponents, ComponentsBot
 from asyncpraw import Reddit
 
 from database import Database
@@ -14,18 +14,18 @@ DB_NAME = "redditrequest.sqlite"
 # global variables
 config: Config
 reddit: Reddit
-bot: commands.Bot
+components_bot: ComponentsBot
 database: Database
 
 
 def main():
     startup()
-    global reddit, bot, config
+    global reddit, components_bot, config
 
     # Create bot instance
-    bot = commands.Bot(command_prefix='/')
-    bot.add_cog(RedditCog(bot, reddit, database, config))
-    bot.run(os.getenv('DISCORD_TOKEN'))
+    components_bot = ComponentsBot(command_prefix='/')
+    components_bot.add_cog(RedditCog(components_bot, reddit, database, config))
+    components_bot.run(os.getenv('DISCORD_TOKEN'))
 
 
 def startup():
